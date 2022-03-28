@@ -1,12 +1,15 @@
+from django.utils import timezone
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
 from rest_framework import status
 from django.db.models import Avg, Min, Count, Max
 from rest_framework.pagination import PageNumberPagination
 from rest_framework.permissions import IsAuthenticated
+from django.core.exceptions import ObjectDoesNotExist
 
-from .serializers import JobSerilaizer
-from .models import Job
+
+from .serializers import CandidatesAppliedSerializer, JobSerilaizer
+from .models import CandidatesApplied, Job
 from .filters import JobsFilter
 
 from django.shortcuts import get_object_or_404
@@ -97,3 +100,72 @@ def getTopicStats(request, topic):
     )
 
     return Response(stats)
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def applyToJob(request, pk):
+    user = request.user
+    job = get_object_or_404(Job, id=pk)
+    try:
+        resume = user.userprofile.resume
+    except ObjectDoesNotExist:
+        return Response(
+            {"error": "Please upload your resume first"},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    if job.last_date < timezone.now():
+        return Response(
+            {"error": "You cannot apply to this job. Date is over"},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    alreadyApplied = job.candidatesapplied_set.filter(user=user).exists()
+    if alreadyApplied:
+        return Response(
+            {"error": "You have already applied to this job."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    jobApplied = CandidatesApplied.objects.create(
+        job=job, user=user, resume=resume
+    )
+    return Response({"applied": True, "job_id": jobApplied.id}, status=status.HTTP_200_OK)
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def getCurrentUserAppliedJobs(request):
+    args = { 'user_id': request.user.id}
+    jobs = CandidatesApplied.objects.filter(**args)
+    serialzer = CandidatesAppliedSerializer(jobs, many=True)
+    return Response(serialzer.data)
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def isAppliedToJob(request, pk):
+    user = request.user
+    job = get_object_or_404(Job, id=pk)
+    applied = job.candidatesapplied_set.filter(user=user).exists()
+    return Response(applied)
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def getCurrentUserJos(request):
+    args = { 'user': request.user.id }
+    jobs = Job.objects.filter(**args)
+    serializer = JobSerilaizer(jobs, many=True)
+    return Response(serializer.data)
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def getCandidatesApplied(request, pk):
+
+    user = request.user
+    job = get_object_or_404(Job, id=pk)
+
+    if job.user != user:
+        return Response({ 'error': 'You can not acces this job' }, status=status.HTTP_403_FORBIDDEN)
+
+    candidates = job.candidatesapplied_set.all()
+
+    serializer = CandidatesAppliedSerializer(candidates, many=True)
+
+    return Response(serializer.data)
